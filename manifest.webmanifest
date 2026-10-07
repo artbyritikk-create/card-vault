@@ -1,0 +1,13 @@
+{
+  "name": "CardVault",
+  "short_name": "CardVault",
+  "description": "Scan visiting cards, extract contact details, save to phone, search by category.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f7f6",
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

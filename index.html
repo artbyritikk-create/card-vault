@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<title>CardVault</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>CardVault</h1>
+  <div class="top-actions">
+    <button id="btnMenu" class="icon-btn" aria-label="Menu">⋯</button>
+  </div>
+</header>
+
+<div class="menu hidden" id="menu">
+  <button id="btnExportVcf">Export all as .vcf</button>
+  <button id="btnExportJson">Backup (JSON)</button>
+  <button id="btnImportJson">Restore backup</button>
+  <button id="btnSettings">Settings</button>
+  <input type="file" id="importFile" accept="application/json" hidden>
+</div>
+
+<main>
+  <input id="search" type="search" placeholder="Search name, business, phone, email…" autocomplete="off">
+  <div id="chips" class="chips"></div>
+  <div id="count" class="muted small"></div>
+  <ul id="list" class="list"></ul>
+  <div id="empty" class="empty hidden">
+    <p>No cards yet.</p>
+    <p class="muted">Tap <b>+</b> to scan your first visiting card.</p>
+  </div>
+</main>
+
+<button id="fab" class="fab" aria-label="Add card">+</button>
+
+<!-- Add / Edit sheet -->
+<div id="sheet" class="sheet hidden">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <button id="btnClose" class="link">Close</button>
+      <h2 id="sheetTitle">New card</h2>
+      <button id="btnSave" class="primary small-btn">Save</button>
+    </div>
+
+    <div class="photos">
+      <label class="photo" data-slot="front">
+        <img alt=""><span>Front<br><small>tap to scan / upload</small></span>
+        <input type="file" accept="image/*" capture="environment" hidden>
+      </label>
+      <label class="photo" data-slot="back">
+        <img alt=""><span>Back<br><small>optional</small></span>
+        <input type="file" accept="image/*" capture="environment" hidden>
+      </label>
+      <label class="photo" data-slot="extra">
+        <img alt=""><span>Extra photo<br><small>optional</small></span>
+        <input type="file" accept="image/*" capture="environment" hidden>
+      </label>
+    </div>
+    <div class="row gap">
+      <button id="btnGallery" class="ghost">Pick from gallery</button>
+      <button id="btnExtract" class="primary">Extract details</button>
+    </div>
+    <div id="status" class="status muted small"></div>
+
+    <form id="form" autocomplete="off">
+      <label>Name <input name="name"></label>
+      <label>Business / Company <input name="business"></label>
+      <label>Designation <input name="title"></label>
+      <label>Category <input name="category" list="catList" placeholder="e.g. Printing, Packaging, Events"></label>
+      <datalist id="catList"></datalist>
+      <label>Phone <input name="phone" type="tel" inputmode="tel"></label>
+      <label>Alternate phone <input name="phone2" type="tel" inputmode="tel"></label>
+      <label>Email <input name="email" type="email"></label>
+      <label>Website <input name="website"></label>
+      <label>Address <textarea name="address" rows="3"></textarea></label>
+      <label>Notes <textarea name="notes" rows="2" placeholder="Where you met, what they do…"></textarea></label>
+    </form>
+
+    <div class="row gap wrap" id="detailActions">
+      <button id="btnVcf" class="primary">Save to phone contacts</button>
+      <a id="lnkCall" class="btn ghost" href="#">Call</a>
+      <a id="lnkMail" class="btn ghost" href="#">Email</a>
+      <button id="btnDelete" class="danger">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="sheet hidden">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <button id="btnSetClose" class="link">Close</button>
+      <h2>Settings</h2>
+      <span></span>
+    </div>
+    <p class="muted small">By default, text is read on your device with free offline OCR (Tesseract). For better accuracy on stylised cards you can add an Anthropic API key — the key stays in this browser only and images are sent straight to Anthropic.</p>
+    <label>Anthropic API key (optional)
+      <input id="apiKey" type="password" placeholder="sk-ant-…">
+    </label>
+    <label class="check"><input type="checkbox" id="useAI"> Use AI extraction when a key is set</label>
+    <button id="btnSetSave" class="primary">Save settings</button>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
