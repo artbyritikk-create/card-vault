@@ -39,8 +39,35 @@ let cards = [];
 let filterCat = '';
 let current = null;       // card being edited
 let activeSlot = 'front';
+const ocrCache = {};      // slot -> hi-res, contrast-boosted copy used only for reading text
 
 // ---------- image handling ----------
+// Hi-res grayscale copy with stretched contrast: text on a small card photo needs the pixels.
+function fileToOcrImage(file, max = 2800) {
+  return new Promise((res, rej) => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1.5, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const x = c.getContext('2d'); x.drawImage(img, 0, 0, c.width, c.height);
+      const d = x.getImageData(0, 0, c.width, c.height), px = d.data;
+      let lo = 255, hi = 0; const g = new Uint8Array(px.length / 4);
+      for (let i = 0, j = 0; i < px.length; i += 4, j++) { const v = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0; g[j] = v; }
+      const hist = new Uint32Array(256); g.forEach(v => hist[v]++);
+      const total = g.length; let acc = 0;
+      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > total * 0.01) { lo = v; break; } }
+      acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > total * 0.01) { hi = v; break; } }
+      const span = Math.max(1, hi - lo);
+      for (let i = 0, j = 0; i < px.length; i += 4, j++) { const v = Math.max(0, Math.min(255, ((g[j] - lo) * 255 / span) | 0)); px[i] = px[i + 1] = px[i + 2] = v; }
+      x.putImageData(d, 0, 0); URL.revokeObjectURL(url);
+      res(c.toDataURL('image/png'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Could not read image')); };
+    img.src = url;
+  });
+}
+
 function fileToDataURL(file, max = 1400, quality = 0.82) {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -58,79 +85,17 @@ function fileToDataURL(file, max = 1400, quality = 0.82) {
   });
 }
 
-// ---------- parsing (offline OCR text -> fields) ----------
-const COMPANY_WORDS = /\b(pvt|private|ltd|limited|llp|inc|corp|co\.|company|solutions|technologies|tech|enterprises|enterprise|industries|industry|traders|trading|associates|group|studio|studios|agency|labs|services|systems|international|exports|imports|packaging|printers|prints|printing|logistics|consultants|consulting|works|mart|store|shop|hub)\b/i;
-const TITLE_WORDS = /\b(founder|co-?founder|ceo|cto|cfo|coo|md|director|manager|owner|partner|proprietor|head|lead|executive|officer|president|vice president|vp|sales|marketing|engineer|consultant|designer|associate|proprieter)\b/i;
-const ADDR_WORDS = /\b(road|rd\.?|street|st\.?|floor|sector|nagar|colony|plot|block|building|bldg|tower|near|opp\.?|opposite|lane|marg|phase|industrial|area|extension|city|dist|district|state|india|delhi|mumbai|gurgaon|gurugram|noida|bangalore|bengaluru|chennai|hyderabad|pune|kolkata|jaipur|ghaziabad|faridabad)\b|\b\d{6}\b/i;
-
-function parseCardText(text) {
-  const out = { name: '', business: '', title: '', phone: '', phone2: '', email: '', website: '', address: '' };
-  let lines = text.split(/\r?\n/).map(l => l.replace(/[|_]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(l => l.length > 1);
-  const used = new Set();
-
-  // email
-  const em = text.match(/[A-Za-z0-9._%+-]+\s?@\s?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/);
-  if (em) out.email = em[0].replace(/\s/g, '').toLowerCase();
-
-  // website
-  lines.forEach((l, i) => {
-    if (out.website) return;
-    if (/@/.test(l)) return;
-    const m = l.match(/((https?:\/\/)?(www\.)[^\s,;]+)|([a-z0-9-]+\.(com|in|co\.in|org|net|io|biz|store|shop|co)\b[^\s,;]*)/i);
-    if (m) { out.website = m[0].replace(/[.,;]+$/, '').toLowerCase(); }
-  });
-
-  // phones
-  const phones = [];
-  lines.forEach((l, i) => {
-    if (/@/.test(l)) return;
-    const found = l.match(/(\+?\d[\d\s().-]{7,}\d)/g);
-    if (found) found.forEach(p => {
-      const digits = p.replace(/\D/g, '');
-      if (digits.length >= 10 && digits.length <= 13 && !(/^\d{6}$/.test(digits))) { phones.push(p.trim()); used.add(i); }
-    });
-  });
-  const norm = p => { let d = p.replace(/[^\d+]/g, ''); if (/^\d{10}$/.test(d)) d = '+91' + d; return d; };
-  const uniq = [...new Set(phones.map(norm))];
-  out.phone = uniq[0] || ''; out.phone2 = uniq[1] || '';
-
-  // mark email/website lines as used
-  lines.forEach((l, i) => { if (/@/.test(l) || (out.website && l.toLowerCase().includes(out.website.replace(/^https?:\/\//, '')))) used.add(i); });
-
-  // address: consecutive address-looking lines
-  const addr = [];
-  lines.forEach((l, i) => { if (!used.has(i) && ADDR_WORDS.test(l) && !TITLE_WORDS.test(l)) { addr.push(l); used.add(i); } });
-  out.address = addr.join(', ');
-
-  // title
-  lines.forEach((l, i) => { if (!out.title && !used.has(i) && TITLE_WORDS.test(l) && l.split(' ').length <= 6) { out.title = l; used.add(i); } });
-
-  // business
-  lines.forEach((l, i) => { if (!out.business && !used.has(i) && COMPANY_WORDS.test(l)) { out.business = l; used.add(i); } });
-
-  // name: first clean alphabetic line of 2-4 words
-  lines.forEach((l, i) => {
-    if (out.name || used.has(i)) return;
-    const w = l.split(' ');
-    if (w.length >= 2 && w.length <= 4 && /^[A-Za-z.\s'-]+$/.test(l)) { out.name = l.replace(/\b\w/g, c => c.toUpperCase()); used.add(i); }
-  });
-
-  // fallback business: first leftover line
-  if (!out.business) lines.forEach((l, i) => { if (!out.business && !used.has(i) && /[A-Za-z]/.test(l) && l.length > 2) { out.business = l; used.add(i); } });
-  return out;
-}
-
 // ---------- extraction ----------
 async function ocrImages(dataUrls, onProgress) {
-  if (!window.Tesseract) throw new Error('OCR engine not loaded (check internet once, then it works offline).');
-  let text = '';
+  if (!window.Tesseract) throw new Error('OCR engine not loaded (connect to the internet once, then it works offline).');
+  const texts = [];
   for (let i = 0; i < dataUrls.length; i++) {
     const r = await Tesseract.recognize(dataUrls[i], 'eng', {
       logger: m => { if (m.status === 'recognizing text') onProgress && onProgress(Math.round(((i + m.progress) / dataUrls.length) * 100)); }
     });
-    text += '\n' + r.data.text;
+    texts.push(r.data.text);
   }
-  return text;
+  return texts;
 }
 
 async function aiExtract(dataUrls, key) {
@@ -147,20 +112,6 @@ async function aiExtract(dataUrls, key) {
   const m = txt.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('AI returned no data');
   return JSON.parse(m[0]);
-}
-
-// guess a category from the text if user did not give one
-function guessCategory(f, rawText) {
-  const t = (rawText || '') + ' ' + f.business;
-  const map = [
-    [/print|packag|label|box/i, 'Printing & Packaging'], [/gift|hamper|merch/i, 'Gifting'],
-    [/event|wedding|decor|photo|entertain/i, 'Events'], [/logistic|transport|cargo|freight|courier/i, 'Logistics'],
-    [/tech|software|app|digital|it\b|web/i, 'Technology'], [/market|ads|media|brand|creative|agency/i, 'Marketing'],
-    [/food|cafe|restaurant|catering|bakery/i, 'Food'], [/real\s?estate|builder|propert|construction/i, 'Real Estate'],
-    [/finance|invest|insurance|account|ca\b|tax|loan/i, 'Finance'], [/textile|garment|fashion|apparel/i, 'Fashion & Textile']
-  ];
-  for (const [re, c] of map) if (re.test(t)) return c;
-  return '';
 }
 
 // ---------- vCard ----------
@@ -215,6 +166,7 @@ function render() {
 
 // ---------- sheet (add / edit) ----------
 function openSheet(card) {
+  Object.keys(ocrCache).forEach(k => delete ocrCache[k]);
   current = card ? { ...card } : { id: uid(), createdAt: Date.now(), front: '', back: '', extra: '' };
   const isNew = !card;
   $('#sheetTitle').textContent = isNew ? 'New card' : 'Edit card';
@@ -245,28 +197,33 @@ function updateLinks() {
 }
 async function handleFile(slot, file) {
   if (!file) return;
-  try { current[slot] = await fileToDataURL(file); setPhoto(slot, current[slot]); activeSlot = slot; markActive(); $('#status').textContent = 'Photo added. Tap "Extract details" when front/back are ready.'; }
+  try { current[slot] = await fileToDataURL(file); ocrCache[slot] = await fileToOcrImage(file); setPhoto(slot, current[slot]); activeSlot = slot; markActive(); $('#status').textContent = 'Photo added. Tap "Extract details" when front/back are ready.'; }
   catch (e) { toast(e.message); }
 }
 async function extract() {
-  const imgs = [current.front, current.back, current.extra].filter(Boolean);
-  if (!imgs.length) return toast('Add a photo of the card first');
+  const slots = ['front', 'back', 'extra'].filter(k => current[k]);
+  if (!slots.length) return toast('Add a photo of the card first');
   const st = $('#status'); $('#btnExtract').disabled = true;
   try {
-    const s = Settings.get();
-    let fields, raw = '';
-    if (s.apiKey && s.useAI) {
+    const cfg = Settings.get();
+    let fields;
+    if (cfg.apiKey && cfg.useAI) {
       st.textContent = 'Reading card with AI…';
-      fields = await aiExtract(imgs.slice(0, 2), s.apiKey);
+      fields = await aiExtract(slots.slice(0, 2).map(k => current[k]), cfg.apiKey);
+      if (fields.category == null) fields.category = '';
     } else {
       st.textContent = 'Reading card… 0%';
-      raw = await ocrImages(imgs.slice(0, 2), p => st.textContent = `Reading card… ${p}%`);
-      fields = parseCardText(raw);
+      const imgs = slots.slice(0, 3).map(k => ocrCache[k] || current[k]);
+      const texts = await ocrImages(imgs, p => st.textContent = `Reading card… ${p}%`);
+      fields = mergeSides(texts.map(parseCardText));
+      fields.category = guessCategory(fields);
     }
     const f = $('#form');
     for (const k of ['name', 'business', 'title', 'phone', 'phone2', 'email', 'website', 'address']) if (fields[k]) f.elements[k].value = fields[k];
-    if (!f.elements.category.value) f.elements.category.value = fields.category || guessCategory(fields, raw);
-    st.textContent = 'Done — please check the details below and fix anything wrong.';
+    if (!f.elements.category.value && fields.category) f.elements.category.value = fields.category;
+    if (!f.elements.notes.value && fields.about) f.elements.notes.value = fields.about;
+    const missing = ['name', 'phone', 'email'].filter(k => !f.elements[k].value);
+    st.textContent = missing.length ? `Done. Couldn't find: ${missing.join(', ')} — retake a sharper, closer photo or type it in.` : 'Done — please check the details below and fix anything wrong.';
     updateLinks();
   } catch (e) { st.textContent = 'Extraction failed: ' + e.message + ' You can still type the details in.'; }
   $('#btnExtract').disabled = false;

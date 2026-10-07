@@ -1,5 +1,5 @@
-const CACHE = 'cardvault-v1';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'cardvault-v2';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'parser.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -10,13 +10,17 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || req.url.includes('api.anthropic.com')) return;
-  e.respondWith(
-    caches.match(req).then(hit => hit || fetch(req).then(res => {
-      // cache OCR engine/language files after first use so scanning works offline
-      if (res.ok && /jsdelivr|tessdata|projectnaptha|tesseract/i.test(req.url)) {
-        const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy));
-      }
-      return res;
-    }).catch(() => hit))
-  );
+  const same = new URL(req.url).origin === self.location.origin;
+  if (same) {
+    // app files: network first so updates show up immediately, cache as offline fallback
+    e.respondWith(fetch(req).then(res => {
+      const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res;
+    }).catch(() => caches.match(req)));
+    return;
+  }
+  // OCR engine / language data: cache first, saved after first use so scanning works offline
+  e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {
+    if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
+    return res;
+  })));
 });
